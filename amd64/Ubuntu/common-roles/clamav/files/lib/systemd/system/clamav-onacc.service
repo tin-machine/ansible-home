@@ -1,0 +1,45 @@
+# プロセスが落ちている時のための下記の２つの設定を追加している。
+#
+# [Unit]
+# StartLimitInterval=500s
+# StartLimitBurst=5
+#
+# [Service]
+# Restart=always
+# RestartSec=90
+# 
+# 上記の背景としては、下記のエラーが出て起動しなかったため。
+# sudo systemctl status clamav-onacc.service
+#× clamav-onacc.service - ClamAV on acc
+#     Loaded: loaded (/lib/systemd/system/clamav-onacc.service; enabled; vendor preset: enabled)
+#     Active: failed (Result: exit-code) since Wed 2022-11-23 14:29:09 JST; 1min 10s ago
+#    Process: 872 ExecStart=/usr/sbin/clamonacc -F --fdpass (code=exited, status=2)
+#   Main PID: 872 (code=exited, status=2)
+#        CPU: 16ms
+#
+#11月 23 14:29:09 kaoru-hp250g6notebookpc systemd[1]: clamav-onacc.service: Scheduled restart job, restart counter is at 5.
+#11月 23 14:29:09 kaoru-hp250g6notebookpc systemd[1]: Stopped ClamAV on acc.
+#11月 23 14:29:09 kaoru-hp250g6notebookpc systemd[1]: clamav-onacc.service: Start request repeated too quickly.
+#11月 23 14:29:09 kaoru-hp250g6notebookpc systemd[1]: clamav-onacc.service: Failed with result 'exit-code'.
+#11月 23 14:29:09 kaoru-hp250g6notebookpc systemd[1]: Failed to start ClamAV on acc.
+# clamav-daemon.service が起動してからポートが開くまでにタイムラグがあり、
+# そのタイミングで clamonacc が起動すると、ポートにアクセスできない、という状況だった。
+# 常時起動のオプションを有効にし、何回か時間をかけて起動するようにした。
+# RestartSec * StartLimitBurst < StartLimitInterval 
+# この数値に収まる必要がある。
+
+[Unit]
+Description=ClamAV on acc
+Wants=clamav-daemon.service
+After=clamav-daemon.service
+StartLimitInterval=500s
+StartLimitBurst=5
+
+[Service]
+ExecStart=/usr/sbin/clamonacc -F --fdpass
+StandardOutput=syslog
+Restart=always
+RestartSec=90
+
+[Install]
+WantedBy=multi-user.target

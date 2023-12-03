@@ -1,0 +1,67 @@
+- name: package.accept_keywords の確認
+  command: cat /etc/portage/package.accept_keywords
+  register: accept_keywords_result
+  check_mode: no
+  changed_when: false
+  failed_when: false
+
+- name: media-video/makemkv の開発版を許可する
+  shell: |
+    echo -e '\nmedia-video/makemkv **' >> /etc/portage/package.accept_keywords
+  when: "'makemkv' not in accept_keywords_result.stdout"
+
+- name: package.license の確認
+  command: cat /etc/portage/package.license
+  register: package_license_result
+  check_mode: no
+  changed_when: false
+  failed_when: false
+
+- name: media-video/makemkv のライセンス許可を追加
+  shell: |
+    echo -e '\n>=media-video/makemkv-1.16.7 MakeMKV-EULA' >> /etc/portage/package.license
+  when: "'makemkv' not in package_license_result.stdout"
+
+- name: makemkv をインストール
+  portage: >
+    package=media-video/makemkv
+    state=present
+    deep=yes
+    noreplace=no
+    changed_use=yes
+
+# DVDやCDの情報を取得する isoinfo コマンドが入っている cdrtools をインストール
+- name: app-cdr/cdrtools をインストール
+  portage: >
+    package=app-cdr/cdrtools
+    state=present
+    deep=yes
+    noreplace=no
+    changed_use=yes
+
+# makemkvはカーネルモジュール sg が必要。Gentooはデフォルトでは読み込まないので
+# /etc/modules-load.d配下にファイルを作ってカーネルモジュールを読み込むようにする
+# https://wiki.gentoo.org/wiki/Handbook:AMD64/Installation/Kernel/ja#.E3.83.A2.E3.82.B8.E3.83.A5.E3.83.BC.E3.83.AB.E3.81.AE.E8.A8.AD.E5.AE.9A
+- name: /etc/modules-load.d/sg があるか確認
+  stat:
+    path: /etc/modules-load.d/sg
+  register: modules_load_sg_check
+  check_mode: no
+  changed_when: false
+
+- name: カーネルモジュール sg  を読み込むようにする
+  shell: |
+    mkdir /etc/modules-load.d
+    echo 'sg' >> /etc/modules-load.d/sg.conf
+  when: not modules_load_sg_check.stat.exists
+
+- name: データ出力先マウントポイントのディレクトリ作成
+  file: path=/mnt/nas/Web state=directory owner=root group=cdrom mode=0775
+
+- name: データ出力先をマウント
+  mount:
+    src: 10.10.254.10:/Web
+    path: /mnt/nas/Web
+    opts: rw,hard,intr,noatime,async,nolock
+    state: mounted
+    fstype: nfs

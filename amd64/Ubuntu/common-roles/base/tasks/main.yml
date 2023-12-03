@@ -1,0 +1,134 @@
+- name: ディスク書き込みを遅延する処理が入っているか確認
+  block:
+  - name: 設定ファイルがあるか確認
+    stat:
+      path: /etc/sysctl.d/99-disk.conf
+    register: disk_check
+    check_mode: no
+    changed_when: false
+  - name: 書き込み遅延する設定を追加
+    shell: |
+      echo -e 'vm.dirty_background_ratio=70\nvm.dirty_ratio=70\nvm.dirty_writeback_centisecs=5000\nvm.dirty_expire_centisecs=30000' >> /etc/sysctl.d/99-disk.conf
+      sysctl -p
+    when: not disk_check.stat.exists
+
+# https://docs.ansible.com/ansible/latest/collections/ansible/posix/mount_module.html
+
+- name: パッケージレポジトリ追加
+  block:
+    - name: Add an apt key by id from a keyserver
+      ansible.builtin.apt_key:
+        keyserver: keyserver.ubuntu.com
+        id: B05498B7
+    - name: GPUのドライバ
+      ansible.builtin.apt_repository:
+          repo: 'ppa:oibaf/graphics-drivers'
+    - name: VSCodeのGPG署名をインストール
+      apt_key:
+        url: https://packages.microsoft.com/keys/microsoft.asc
+        state: present
+      become: true
+    - name: VSCode
+      apt_repository:
+        repo: 'deb [arch=amd64] https://packages.microsoft.com/repos/vscode stable main'
+        update_cache: yes
+    - name: ChromeのGPG署名をインストール
+      apt_key:
+        url: https://dl-ssl.google.com/linux/linux_signing_key.pub
+        state: present
+      become: true
+    - name: Chrome
+      apt_repository:
+        repo: "deb http://dl.google.com/linux/chrome/deb/ stable main"
+        update_cache: yes
+    - name: SteamのGPG署名をインストール
+      apt_key:
+        url: https://repo.steampowered.com/steam/archive/stable/steam.gpg
+        state: present
+      become: true
+    - name: Steam
+      apt_repository:
+        repo: 'deb http://repo.steampowered.com/steam/ precise steam'
+        update_cache: yes
+ 
+# - name: steam repo
+#   ansible.builtin.apt_repository:
+#       repo: 'deb http://repo.steampowered.com/steam/ precise steam'
+
+# - name: Add specified repository into sources list
+#   ansible.builtin.apt_repository:
+#       repo: 'multiverse'
+
+- name: Run the equivalent of "apt-get update" as a separate step
+  apt:
+    update_cache: yes
+       
+- name: Upgrade all packages to the latest version
+  apt:
+    upgrade: dist
+
+- name: Install multi packages
+  apt:
+    name:
+      - nfs-common 
+      - vim
+      - mesa-utils 
+      - fcitx-mozc 
+      - tmux 
+      - fish 
+      - fzf 
+      - hub 
+      - neovim 
+      - openssh-server 
+      - nfs-common 
+      - xdg-user-dirs-gtk 
+      - curl 
+      - awscli 
+      - golang 
+      - asunder 
+      - lame
+      - bridge-utils 
+      - qemu 
+      - qemu-kvm 
+      - libvirt-daemon 
+      - libvirt-clients 
+      - virt-manager 
+      - autokey-qt
+      - apt-transport-https
+      - steam-launcher
+      - code
+      - wine
+      - winetricks
+      - google-chrome-stable
+
+# 10.10.254.10:/homes/tomohiro /home/tomohiro nfs defaults,noatime,async 0 0
+# 10.10.254.10:/Public /mnt/nas/Public nfs defaults,noatime,async 0 0
+# 10.10.254.10:/Multimedia /mnt/nas/Multimedia nfs defaults,noatime,async 0 0
+
+- name: make mount point 
+  file: path=/mnt/nas/Multimedia state=directory owner=root group=cdrom mode=0775
+
+- name: mount Multimedia
+  mount:
+    src: 10.10.254.10:/Multimedia
+    path: /mnt/nas/Multimedia
+    opts: rw,hard,intr,noatime,async,nolock
+    state: mounted
+    fstype: nfs
+
+- name: make mount point 
+  file: path=/mnt/nas/Public state=directory owner=root group=cdrom mode=0775
+
+- name: mount public
+  mount:
+    src: 10.10.254.10:/Public
+    path: /mnt/nas/Public
+    opts: rw,hard,intr,noatime,async,nolock
+    state: mounted
+    fstype: nfs
+
+- name: Run the equivalent of "apt-get update" as a separate step
+  apt:
+    update_cache: yes
+
+

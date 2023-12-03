@@ -1,0 +1,9 @@
+- name: 
+  block:
+    - name: ログをtmpfsに書き出すようにする
+      mount: 
+        src: none
+        path: /var/log
+        opts: "rw,size=256m"
+        state: mounted
+        fstype: tmpfs

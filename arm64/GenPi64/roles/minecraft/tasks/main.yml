@@ -1,0 +1,48 @@
+- name: package.accept_keywords の確認
+  command: cat /etc/portage/package.accept_keywords/minecraft
+  register: accept_keywords_result
+  check_mode: no
+  changed_when: false
+  failed_when: false
+
+- name: x11-apps/mesa-progs の開発版を許可する
+  shell: |
+    echo 'x11-apps/mesa-progs **' >> /etc/portage/package.accept_keywords/minecraft
+  when: "'mesa-progs' not in accept_keywords_result.stdout"
+
+- name: openjdk 8 が必要
+  portage: >
+    package=dev-java/openjdk:8
+    state=present
+
+- name: openjdk 17 も新しいバージョンから使うようになった模様
+  portage: >
+    package=dev-java/openjdk:17
+    state=present
+
+- name: multimc起動時にglxgearsを必要とするためインストール
+  portage: >
+    package=x11-apps/mesa-progs
+    state=present
+
+- name: ソースコードをgit clone
+  become_user: demouser
+  shell: |
+    cd ~
+    mkdir ~/MultiMC && cd ~/MultiMC
+    mkdir build
+    mkdir install
+    git clone --recursive https://github.com/MultiMC/Launcher.git src
+
+- name: マイクロソフトのコードを入れる
+  become_user: demouser
+  shell: |
+    cd ~/MultiMC
+    sed -i -e 's/QString MSAClientID = ""/QString MSAClientID = "{{ MSAClientID }}"/' src/notsecrets/Secrets.cpp
+
+- name: ビルド
+  become_user: demouser
+  shell: |
+    cd ~/MultiMC/build
+    cmake -DCMAKE_INSTALL_PREFIX=../install -DLauncher_META_URL:STRING="https://raw.githubusercontent.com/theofficialgman/meta-multimc/master-clean/index.json" ../src
+    make -j6 install

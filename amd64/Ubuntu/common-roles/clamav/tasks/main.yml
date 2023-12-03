@@ -1,0 +1,131 @@
+# /lib/systemd/system/clamav-onacc.service を組み込む処理は無くても
+# https://inaba-serverdesign.jp/blog/20210409/clamav-realtime-scan.html
+# https://security.sios.com/security/clamav-fanotify-onaccess-20210827.html
+# これプラス、systemdからの起動設定が追加できればリアルタイム検索できそう
+# コマンド単発で起動するサンプルがあった。　が、現在はやらなくても リアルタイム検索できるのではないか?
+# ↑ 別のマシンのセットアップ時に確認する
+#  ↑ 必要だった... 更に「先にclamdが起動している必要がある」ので「systemdの起動ファイルの依存関係を記述する必要がある」
+#
+#   https://inaba-serverdesign.jp/blog/20210409/clamav-realtime-scan.html
+#   によると、あるバージョンから、リアルタイムスキャンは別のプログラムに別れたとのこと
+#
+# * 下記の Wants か After を変える
+# * ansible でファイルを上書きする
+# * ansible で自動有効化する
+#
+# kaoru@kaoru-hp250g6notebookpc /n/1/h/k/w/a/x/U/common-roles> cat /lib/systemd/system/clamav-onacc.service
+# [Unit]
+# Description=ClamAV on acc
+# Wants=network-online.target
+# After=network-online.target
+# 
+# [Service]
+# ExecStart=/usr/sbin/clamonacc -F --fdpass
+# StandardOutput=syslog
+# 
+# # ExecStart=/usr/sbin/clamonacc -F --fdpass --log=/var/log/clamav/clamonacc.log
+# 
+# [Install]
+# WantedBy=multi-user.target
+# kaoru@kaoru-hp250g6notebookpc /n/1/h/k/w/a/x/U/common-roles> ls -l /lib/systemd/system/clamav-onacc.service
+# -rw-r--r-- 1 root root 283 11月  6 16:54 /lib/systemd/system/clamav-onacc.service
+# 
+#
+# /etc/clamav/clamd.conf の末尾をansibleで 追記する。あるいは、ファイル全体を差し替える
+# ↑ これができたら一旦、終了する
+#
+# https://www.fumibu.com/use_clam-anti-virus_debian-package/#toc5
+#   設定全般についての記述が役に立つ
+
+- name: Install multi packages
+  apt:
+    name:
+      - clamav
+      - clamav-daemon
+      - libnotify-bin
+      - apparmor-utils
+
+- name: clamav関連デーモンの自動起動
+  vars:
+    package_list:
+    - clamav-daemon
+    - clamav-freshclam
+  block:
+  - name: デーモンを起動
+    loop: "{{ package_list }}"
+    service:
+      name: "{{ item }}"
+      state: started
+      enabled: yes
+
+# 定期実行のスクリプトの参考にした
+# https://qiita.com/kannkyo/items/1cc32231afad88c11d8e
+- name: 定期実行用スクリプトのコピー
+  copy:
+    src: ../files/clamavd.bash
+    dest: /usr/local/bin/clamavd.bash
+    mode: 0755
+
+- name: crontabで定期実行
+  cron:
+    name: clamavd weekly
+    minute: "30"
+    hour: "11"
+    weekday: "7"
+    job: "/usr/local/bin/clamavd.bash /home/kaoru"
+    state: present
+
+- name: ウィルスDBのアップデートの回数を減らす(大きなセキュリティホールだと前日には話題になるので1日3回程度としてみた)
+  lineinfile:
+    path: '/etc/clamav/freshclam.conf'
+    regexp: '^Checks '
+    line: 'Checks 3'
+    state: present
+
+# リアルタイム検索 on access の参考
+# https://wiki.archlinux.jp/index.php/ClamAV#.E3.82.AA.E3.83.B3.E3.82.A2.E3.82.AF.E3.82.BB.E3.82.B9.E3.82.B9.E3.82.AD.E3.83.A3.E3.83.B3
+- name: リアルタイムスキャンの設定
+  block:
+    - name: リアルタイムスキャンのためのスクリプト
+      copy:
+        src: ../files/etc/clamav/virus-event.bash
+        dest: /etc/clamav/virus-event.bash
+        mode: 0755
+    - name: リアルタイムスキャンの起動スクリプト
+      copy:
+        src: ../files/lib/systemd/system/clamav-onacc.service
+        dest: /lib/systemd/system/clamav-onacc.service
+        mode: 0644
+    - name: リアルタイムスキャンのデーモンを有効化
+      service:
+        name: clamav-onacc
+        state: started
+        enabled: yes
+    - name: sudoをパスワードなしで許可
+      copy:
+        src: ../files/etc/sudoers.d/clamav
+        dest: /etc/sudoers.d/clamav
+        mode: 0440
+    - name: AppArmorでの制限状況の確認
+      command: aa-status
+      register: aa_status_result
+      check_mode: no
+      changed_when: false
+      failed_when: false
+    - name: AppArmor で clamd が制限かかっていたら許可する
+      shell: | 
+        aa-complain clamd
+      when: "'clamd' not in aa_status_result.stdout"
+    - name: リアルタイム検索の設定を追加
+      blockinfile:
+        path: /etc/clamav/clamd.conf
+        insertafter: "^LogFileOnAccess.*$"
+        block: |
+          OnAccessMountPath  /
+          OnAccessExcludePath /proc
+          OnAccessExcludePath /run
+          OnAccessExcludePath /sys
+          OnAccessPrevention false
+          OnAccessExtraScanning true
+          OnAccessExcludeUname clamav
+          VirusEvent /etc/clamav/virus-event.bash

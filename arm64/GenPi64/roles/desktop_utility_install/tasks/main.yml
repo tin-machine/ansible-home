@@ -1,0 +1,14 @@
+- name: package.unmask の確認
+  command: cat /etc/portage/package.unmask
+  register: unmask_result
+  check_mode: no
+  changed_when: false
+  failed_when: false
+
+- name: package.accept_keywordsディレクトリ作成
+  file: path=/etc/portage/package.accept_keywords state=directory owner=root group=root mode=0775
+
+- name: 音量調節の media-sound/pavucontrol をインストール
+  portage: >
+    package=media-sound/pavucontrol
+    state=present

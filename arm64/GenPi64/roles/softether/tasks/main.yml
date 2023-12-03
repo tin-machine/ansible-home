@@ -1,0 +1,127 @@
+
+- name: 設定ファイルが読み込まれているか
+  block:
+    - name: ファクト変数出力
+      debug:
+        msg: "{{ ansible_facts.service_mgr }}"
+    - name: whenのテスト
+      debug:
+        msg: 'trueだよ'
+      when: ansible_facts.service_mgr == 'systemd'
+
+- name: ipv6をオフにする
+  block:
+    - name: カーネル設定を確認
+      command: cat /etc/sysctl.d/40-ipv6-off.conf
+      register: ipv6_result
+      check_mode: no
+      changed_when: false
+      failed_when: false
+    - name: ipv6をオフにする
+      shell: |
+        echo -e '\nnet.ipv6.conf.all.disable_ipv6 = 1' >> /etc/sysctl.d/40-ipv6-off.conf
+      when: "'ipv6' not in ipv6_result.stdout"
+
+- name: ダウンロードとコンパイルと自動起動
+  block:
+    - block:
+      - name: Softetherのディレクトリが存在するか確認
+        stat:
+          path: /usr/vpnbridge
+        register: softether_dir_check
+        check_mode: no
+        changed_when: false
+    - block:
+      - name: 一時ディレクトリ作成
+        tempfile:
+          state: directory
+        register: tmpdir
+      - name: git clone
+        shell: |
+          cd {{ tmpdir.path }}
+          git clone --depth 1 https://github.com/SoftEtherVPN/SoftEtherVPN_Stable.git
+      - name: コンパイル
+        shell: |
+          cd {{ tmpdir.path }}/SoftEtherVPN_Stable
+          ./configure
+          make -j5
+      - name: インストール
+        shell: |
+          /etc/init.d/softether stop
+          cd {{ tmpdir.path }}/SoftEtherVPN_Stable
+          make install
+      - name: 一時的ディレクトリ削除
+        file:
+          path: "{{ tmpdir.path }}/SoftEtherVPN_Stable"
+          state: absent
+      when: not softether_dir_check.stat.exists
+    - block:
+      - name: 自動起動
+        block:
+          - name: initd
+            block:
+            - name: initd起動スクリプトが存在するか
+              stat:
+                path: /etc/init.d/softether-vpn
+              register: initd_file
+              check_mode: no
+              changed_when: false
+            - name: initd起動スクリプトのコピー
+              copy:
+                src: ../files/softether_boot_initd
+                dest: /etc/init.d/softether
+                mode: 0755
+            when: ansible_facts.service_mgr == "initd"
+          - name: systemd起動スクリプトのコピー
+            block:
+              - name: ファクト変数ansible_interfaces出力
+                debug:
+                  msg: "{{ ansible_interfaces }}"
+              - name: 'enで始まるインターフェース名の抽出'
+                set_fact:
+                  ethernet_interfaces: "{{ ansible_interfaces | select('match', '^en.*') | join(' ') }}"
+              - name: ethernet_interfacesの出力
+                debug:
+                  msg: "{{ ethernet_interfaces }}"
+              - name: 'テンプレートからコピー'
+                template:
+                  src: softether_boot_systemd.j2
+                  dest: /usr/lib/systemd/system/softether-vpn.service
+                  owner: root
+                  group: root
+                  mode: 0644
+                when: ansible_facts.service_mgr == 'systemd'
+              - name: 'systemctl daemon-reload を実行'
+                systemd:
+                    daemon_reload: yes
+          - name: 自動起動
+            service: >
+              name=softether-vpn
+              state=started
+              enabled=yes
+
+- name: softetherの設定
+  block:
+    - name: SoftEther用ポート番号で接続できるか確認し、設定済みかチェック
+      shell: |
+        vpncmd /server localhost:{{ ListenerCreate }} /PASSWORD:{{ ServerPasswordSet }} /adminhub:DEFAULT /cmd /HELP
+      register:    check_port
+      failed_when: check_port.rc not in [0,1] # 既に設定済みの場合、つまり ListenerCreate のポートが存在する場合は 0 を返す
+    - block:
+      - name: 設定ファイルコピー
+        template:
+          src: setup.txt.j2
+          dest: /root/setup.txt
+          owner: root
+          group: root
+          mode: 0400
+      - name: 未設定の場合、設定ファイルの読み込み
+        shell: |
+          cd /root
+          vpncmd  localhost /SERVER /IN:setup.txt
+        when: check_port.rc == 1
+      - name: 設定ファイルの削除
+        file:
+          path: /root/setup.txt
+          state: absent
+      when: check_port.rc == 1

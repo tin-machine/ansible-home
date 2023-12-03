@@ -1,0 +1,28 @@
+# build.shで作成したイメージのmake.confのmergeのオプションにdeepがついており非常に時間がかかるので外す
+# EMERGE_DEFAULT_OPTS="--jobs --newrepo --newuse --changed-use --changed-deps --changed-slot --deep --tree --unordered-display --nospinner --backtrack=3000 --complete-graph --with-bdeps=y --rebuild-if-new-rev --rebuild-if-new-ver --rebuild-if-unbuilt --rebuilt-binaries --usepkg=y --buildpkg-exclude 'virtual/* sys-kernel/*-sources */*-bin acct-user/* acct-group/*'"
+
+# make.conf について
+# default opts 
+# https://wiki.gentoo.org/wiki/EMERGE_DEFAULT_OPTS/ja
+- name: make.conf を修正
+  block:
+  - name: make.conf に PYTHON_TARGETS を追加
+    lineinfile:
+      path: '/etc/portage/make.conf'
+      regexp: '^PYTHON_TARGETS='
+      line: 'PYTHON_TARGETS="python3_11"'
+      state: present
+  - name: CPUのコア数を取得
+    shell: 'cat /proc/cpuinfo | grep processor | wc -l'
+    register: cpu_num
+    check_mode: no
+    changed_when: false
+  - name: CPU数を表示
+    debug:
+      msg: "{{ cpu_num.stdout }}"
+  - name: make.conf EMERGE_DEFAULT_OPTS を変更する
+    lineinfile:
+      path: '/etc/portage/make.conf'
+      regexp: '^EMERGE_DEFAULT_OPTS='
+      line: "EMERGE_DEFAULT_OPTS=\"--jobs 2 --load-average {{cpu_num.stdout}}\""
+      state: present

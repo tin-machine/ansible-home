@@ -1,0 +1,20 @@
+# userの参考
+# https://runebook.dev/ja/docs/ansible/collections/ansible/builtin/user_module
+- name: ユーザー追加
+  block:
+    - name: "グループ作成"
+      group:
+        name: "{{ item.key }}"
+        gid: "{{ item.value.gid }}"
+        state: present
+      loop: "{{ users | dict2items}}"
+    - name: "ユーザーアカウント作成"
+      user:
+        name: "{{ item.key }}"
+        password: "{{ item.value.password }}"
+        uid: "{{ item.value.uid }}"
+        group: "{{ item.value.gid }}"
+        groups: "{{ item.value.groups }}"
+        shell: "{{ item.value.shell }}"
+        home: "{{ item.value.home }}"
+      loop: "{{ users | dict2items}}"

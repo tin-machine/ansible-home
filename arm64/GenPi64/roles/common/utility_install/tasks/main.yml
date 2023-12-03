@@ -1,0 +1,131 @@
+
+# /var/tmp/portage がzramでマウントされている。
+# 通常、こちらの方が高速だが、大きめのビルドを行う場合、ディスクフルでビルドできないため
+# ローカルドライブに
+# /usr/local/tmp/portage
+# を作成して /etc/portage/make.confの環境変数を変えて、こちらでビルドする。
+# システム系のものはzramでも大丈夫だが、ユーティリティ系のものは大きいものがあるので、
+# このタイミングで切り替える。
+- name: portageのビルドをローカルストレージの /usr/local/tmp/portage で行う
+  block:
+  - name: ディレクトリ作成
+    file:
+      path: /usr/local/tmp/portage
+      state: directory
+  - name: ビルド作業用ディレクトリの変更
+    # https://wiki.gentoo.org/wiki/Handbook:AMD64/Full/Portage/ja
+    lineinfile:
+      path: '/etc/portage/make.conf'
+      regexp: '^PORTAGE_TMPDIR'
+      line: 'PORTAGE_TMPDIR="/usr/local/tmp/portage"'
+      state: present
+
+- name: package.unmask の確認
+  command: cat /etc/portage/package.unmask
+  register: unmask_result
+  check_mode: no
+  changed_when: false
+  failed_when: false
+
+- name: package.accept_keywordsディレクトリ作成
+  file: path=/etc/portage/package.accept_keywords state=directory owner=root group=root mode=0775
+
+- name: package.accept_keywords の確認
+  command: cat /etc/portage/package.accept_keywords/package.accept_keywords
+  register: accept_keywords_result
+  check_mode: no
+  changed_when: false
+  failed_when: false
+
+- name: シンプルなアプリ追加
+  portage: >-
+    package={{ item }}
+    loadavg=5
+    state=present
+  loop:
+    - app-portage/flaggie
+    - app-misc/jq
+    - app-misc/tmux
+    - app-vim/vim-tmux
+    - net-dns/bind-tools
+    - app-admin/logrotate
+    - app-admin/ansible
+
+# pkgdevは一時的にビルドに失敗するのでコメントアウト
+#    - dev-util/pkgdev
+
+# 下記のループは serviceしか、つまりloopの手前のものしかループされない可能性がある。
+- name: デーモン起動が必要なパッケージ
+  vars:
+    package_list:
+      - sys-process/cronie
+      - app-admin/rsyslog
+      - ntp
+    daemon_list:
+      - cronie
+      - rsyslog
+      - ntpd
+  block:
+  - name: インストール
+    loop: "{{ package_list }}"
+    portage: >-
+      package={{ item }}
+      state=present
+  - name: デーモン起動
+    loop: "{{ daemon_list }}"
+    service: >-
+      name={{ item }}
+      state=started
+      enabled=yes
+
+- name: 開発版を許可するインストール
+  vars:
+    package_list:
+    - app-shells/fzf
+    - app-text/lv
+    - dev-vcs/hub
+  block:
+  - name: regex_replaceのテスト
+    loop: "{{ package_list }}"
+    debug:
+      msg: "/etc/portage/package.accept_keywords/{{ item | regex_replace('^.*\\/(.*)$', '\\1') }}"
+  - name: package.accept_keywords配下にファイルを置く
+    loop: "{{ package_list }}"
+    lineinfile:
+      # lineinfile の使い方 https://qiita.com/tbuchi888/items/80fded8d11366e967290
+      # https://qiita.com/cognitom/items/57de72b739642041dcd5#lineinfile
+      path: "/etc/portage/package.accept_keywords/{{ item | regex_replace('^.*\\/(.*)$', '\\1') }}"
+      line: "{{ item }} **"
+      # regexp には ** のような正規表現は使えなかった。pythonのエラーになる。
+      # またバックスラッシュでのエスケープもエラーになる。
+      regexp: "^{{ item }} .*$"
+      state: present
+      create: yes
+  - name: インストール
+    loop: "{{ package_list }}"
+    portage: >-
+      package={{ item }}
+      loadavg=1
+      state=present
+
+# - name: fish関連
+#   block:
+#   - name: fish が dev-libs/libpcre2 の use flag に pcre32 が付いている事を要求するので確認する
+#     command: flaggie libpcre2 '?pcre32'
+#     register: libpcre2_result
+#     check_mode: no
+#     changed_when: false
+#   - name: libpcre2 のフラグ確認
+#     debug:
+#       msg: "{{ libpcre2_result.stdout }}"
+#   - name: fish が dev-libs/libpcre2 の use flag に pcre32 が付いている事を要求するので追加する
+#     block:
+#       - name: fish use
+#         when: libpcre2_result.stdout.find('?') != 1
+#         command: |
+#           flaggie dev-libs/libpcre2 +pcre32
+#   - name: app-shells/fish install
+#     community.general.portage:
+#       package: 
+#         - app-shells/fish
+#       state: present

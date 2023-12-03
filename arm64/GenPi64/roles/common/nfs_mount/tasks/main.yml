@@ -1,0 +1,86 @@
+# portageでの書き方
+# https://docs.ansible.com/ansible/2.3/portage_module.html
+
+- name: nfs-utilsインストール
+  portage: >
+    package="net-fs/nfs-utils"
+    sync=no
+    deep=no
+    state=present
+
+- name: バイナリパッケージのディレクトリをマウント
+  mount:
+    src: 10.10.254.10:/Public/Gentoo/raspi64/var/cache/binpkgs
+    path: /var/cache/binpkgs
+    opts: rw,hard,intr,noatime,async,nolock
+    state: mounted
+    fstype: nfs
+
+- name: package.useをマウント
+  mount:
+    src: 10.10.254.10:/Public/Gentoo/raspi64/etc/portage/package.use
+    path: /etc/portage/package.use
+    opts: rw,hard,intr,noatime,async,nolock
+    state: mounted
+    fstype: nfs
+
+- name: package.maskをマウント
+  mount:
+    src: 10.10.254.10:/Public/Gentoo/raspi64/etc/portage/package.mask
+    path: /etc/portage/package.mask
+    opts: rw,hard,intr,noatime,async,nolock
+    state: mounted
+    fstype: nfs
+
+- name: package.envをマウント
+  mount:
+    src: 10.10.254.10:/Public/Gentoo/raspi64/etc/portage/package.env
+    path: /etc/portage/package.env
+    opts: rw,hard,intr,noatime,async,nolock
+    state: mounted
+    fstype: nfs
+
+- name: package.accept_keywordsをマウント
+  mount:
+    src: 10.10.254.10:/Public/Gentoo/raspi64/etc/portage/package.accept_keywords
+    path: /etc/portage/package.accept_keywords
+    opts: rw,hard,intr,noatime,async,nolock
+    state: mounted
+    fstype: nfs
+
+- name: autofs設定
+  block:
+  - name: package.accept_keywords の確認
+    command: cat /etc/portage/package.accept_keywords/autofs
+    register: accept_keywords_result_autofs
+    check_mode: no
+    changed_when: false
+    failed_when: false
+  - name: autofs の開発版を許可する
+    shell: |
+      echo -e '\nnet-fs/autofs **' >> /etc/portage/package.accept_keywords/autofs
+    when: "'autofs' not in accept_keywords_result_autofs.stdout"
+  - name: install autofs
+    portage: >
+      package=net-fs/autofs
+      state=present
+      update=yes
+      deep=no
+  - name: auto.masterを修正
+    # https://qiita.com/cognitom/items/57de72b739642041dcd5#lineinfile
+    lineinfile:
+      path: '/etc/autofs/auto.master'
+      regexp: '^#\s*\/net\s*\/etc\/autofs\/auto.net'
+      line: '/net    /etc/autofs/auto.net'
+      state: present
+  - name: autofs で NFSマウントする時のオプションにnolock, async, noatime追加
+    lineinfile:
+      path: '/etc/autofs/auto.net'
+      regexp: '^opts="-fstype=nfs.*$'
+      line: 'opts="-fstype=nfs,hard,nodev,nosuid,noatime,async,nolock"'
+      state: present
+  - name: add autofsd default runlevel
+    service: >
+      name=autofs
+      state=restarted
+      enabled=yes

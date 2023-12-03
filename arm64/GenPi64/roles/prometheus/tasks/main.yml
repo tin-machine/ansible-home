@@ -1,0 +1,47 @@
+- name: prometheusコンパイルに必要なパッケージを追加
+  block:
+    - name: nodejs をインストール
+      portage: >
+        package=net-libs/nodejs
+        state=present
+        noreplace=no
+        update=yes
+        changed_use=yes
+    - name: dev-lang/go をインストール
+      portage: >
+        package=dev-lang/go
+        state=present
+        noreplace=no
+        changed_use=yes
+
+- name: prometheusのコンパイル、インストール
+  block:
+  - name: インストールされているか確認
+    stat:
+      path: /usr/local/bin/prometheus
+    register: prometheus_check
+  - name: 一時ディレクトリ作成
+    tempfile:
+      state: directory
+    register: tmpdir
+    when: prometheus_check.stat.exists == False
+  - name: git clone
+    shell: |
+      cd {{ tmpdir.path }}
+      git clone --depth 1 https://github.com/prometheus/prometheus.git
+    when: prometheus_check.stat.exists == False
+  - name: コンパイル
+    shell: |
+      cd {{ tmpdir.path }}/prometheus
+      npm install lezer-promql @codemirror/autocomplete @codemirror/highlight
+      make build
+    when: prometheus_check.stat.exists == False
+  - name: インストール
+    shell: |
+      cd {{ tmpdir.path }}/prometheus
+      cp prometheus /usr/local/bin
+    when: prometheus_check.stat.exists == False
+  - name: 一時的ディレクトリ削除
+    file:
+      path: "{{ tmpdir.path }}"
+      state: absent

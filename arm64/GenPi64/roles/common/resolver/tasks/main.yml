@@ -1,0 +1,15 @@
+- name: ホスト名の表示
+  debug:
+    msg: "{{ inventory_hostname }}"
+
+- name: ホスト名の設定
+  hostname:
+    name: "{{ inventory_hostname }}"
+
+- name: hostsファイルの設定
+  template:
+    src: hosts.j2
+    dest: /etc/hosts
+    owner: root
+    group: root
+    mode: 0644

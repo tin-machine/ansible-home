@@ -1,0 +1,191 @@
+
+# gccのバージョンチェックのshell内でtrueを入れているのは、
+# grepが「チェックする文字列を含まなかったらエラーコードを返す」という仕様で、
+# ansibleが止まってしまうため。
+- name: sys-devel/gcc を11にする
+  block:
+  - name: gccが11.2かバージョンチェック
+    shell: |
+      INSTALLED_VERSION=$(eix-update && eix -I sys-devel/gcc |grep Installed | grep 11.2) ; true
+    register: gcc_results
+    changed_when: no
+    ignore_errors: yes
+    check_mode: no
+  - name: sys-devel/gcc を11にする
+    shell: |
+      NUMBER=$(gcc-config --list-profiles | grep 11.2 | awk '{print $1}' | sed -e 's/\[//' -e 's/\]//')
+      gcc-config $NUMBER
+      source /etc/profile
+      emerge --oneshot sys-devel/gcc
+      emerge --oneshot --usepkg=n sys-devel/libtool
+    when: "'11.2' not in gcc_results.stdout"
+
+- name: package.maskの内容を取得
+  command: cat /etc/portage/package.mask/package.mask
+  register: package_mask_result
+  check_mode: no
+  changed_when: false
+  failed_when: false
+
+# /etc/portage/package.use/zz-autounmask
+# に
+# >=sys-apps/portage-3.0.30-r1 python_targets_python3_8
+# が記載されている必要があった。
+# なにかautounmaskが実行されるタイミングで更新されたのだろうか?
+# --autounmask-write をつけると自動的に実行される
+# https://wiki.gentoo.org/wiki/Knowledge_Base:Unmasking_a_package
+- name: portage の package.use を確認
+  stat:
+    path: "/etc/portage/package.use/portage"
+  register: portage_result
+  check_mode: no
+  changed_when: false
+
+- name: portage の package.use を設定する
+  block:
+    - name: add locale
+      shell: |
+        echo '>=sys-apps/portage-3.0.30-r1 python_targets_python3_8' >> /etc/portage/package.use/portage
+      when: portage_result.stat.exists == false
+
+# 下記はportageのインストールの『前に』行う必要がある
+# 下記の --ignore-built-slot-operator-deps=y をつけてインストールするパッケージは減らしたい。
+#
+# sys-libs/libcrypt のアップデートが難しい
+# https://wiki.gentoo.org/wiki/Project:Toolchain/libcrypt_implementation
+# ↑　を参考にしてスロット関連の依存関係のエラーを無視する  --ignore-built-slot-operator-deps=y  をつけてemergeする。
+# 更に @world で実行すると sys-libs/libxcrypt-4.4.27 のemergeで失敗する
+# (私がバイナリパッケージからインストールしたのが悪いかもしれないが、
+# Perlが動作しなくなっていた。 sys-libs/libxcrypt のconfigureの際にPerlのチェックがあり、そこでエラーになる。
+- name: 一度だけ sys-libs/libcrypt をアップデートするため下記を実行する
+  block:
+    - name: sys-apps/man-pages をインストール
+      portage: >
+        package="sys-apps/man-pages"
+        state=present
+        noreplace=no
+    - name: app-misc/pax-utils をインストール
+      portage: >
+        package="app-misc/pax-utils"
+        state=present
+        noreplace=no
+    - name: net-wireless/wpa_supplicant を -bindist でコンパイルする( openssl が bindist であることを要求する )
+      portage: >
+        package=net-wireless/wpa_supplicant 
+        state=present
+        update=yes
+        newuse=yes
+    - name: net-misc/openssh をコンパイルする( opensslも合わせてコンパイルされる )
+      portage: >
+        package=net-misc/openssh
+        state=present
+        update=yes
+        newuse=yes
+    - name: virtual/libcrypt-2 に伴うエラーがでるパッケージを --ignore-built-slot-operator-deps=y をつけてインストール
+      shell: |
+         emerge --newuse --jobs=3 --ignore-built-slot-operator-deps=y  --update --load-average=5.0 --getbinpkg --usepkg \
+           sys-apps/shadow \
+           net-misc/openssh \
+           dev-libs/openssl
+
+- name: EAPI がアップデートされている可能性があるので、まず portage をアップデートする
+  portage: >
+    package="sys-apps/portage"
+    state=present
+    noreplace=no
+    loadavg=5
+
+# - name: pythonが古くパッケージの依存関係が循環エラーを起こしていそう
+#   portage: >
+#     package=dev-lang/python
+#     state=present
+#     noreplace=yes
+#     loadavg=5
+
+#  * Error: circular dependencies:
+# 
+# (sys-libs/libxcrypt-4.4.27:0/1::gentoo, ebuild scheduled for merge) depends on
+#  (sys-libs/glibc-2.33-r7:2.2/2.2::gentoo, ebuild scheduled for merge) (buildtime)
+#   (dev-lang/python-3.9.9-r1:3.9/3.9::gentoo, ebuild scheduled for merge) (buildtime)
+#    (virtual/libcrypt-2:0/2::gentoo, ebuild scheduled for merge) (buildtime_slot_op)
+#     (sys-libs/libxcrypt-4.4.27:0/1::gentoo, ebuild scheduled for merge) (runtime)
+
+# 下記のpython、 state=emerged とすると都度、コンパイルがされる。
+# 都度、コンパイルしたい場合は良いがwhenなどで条件を設定した方がより適切だと思う
+# - name: python3.9が古くパッケージの依存関係が循環エラーを起こしていそう
+#   portage: >
+#     package=dev-lang/python:3.9
+#     state=present
+#     noreplace=no
+
+# virtual/libcrypt-1-r1 は下記の理由でmaskedになったので削除する
+#
+# !!! The following installed packages are masked:
+# - virtual/libcrypt-1-r1::gentoo (masked by: package.mask)
+# /var/db/repos/gentoo/profiles/base/package.mask:
+# Sam James <sam@gentoo.org> (2021-11-22)
+# Mask the older libcrypt virtual (which accepted glibc[crypt]) to ease
+# dependency resolution. In a fair number of cases, this has helped
+# upgrades go through cleanly.
+# Read the news item if you need help!
+# (This mask is undone in musl profiles where the transition is not yet being
+# made.)
+# bug #699422.
+# 
+# ↓ 下記の古い virtual/libcrypt を削除するのは危険
+# 　Perlが
+#　perl: error while loading shared libraries: libcrypt.so.2: cannot open shared object file: No such file or directory
+#　というエラーで起動しなくなる。また libxcrypt のconfigureでPerlが必要。
+# ↓　で 2回目以降に エラーが出たら unmerged を変える必要が出るかも
+#- name: virtual/libcrypt-1-r1 を削除
+#  portage: >
+#    package="virtual/libcrypt-1-r1"
+#    state=unmerged
+ 
+# - name: update flaggie
+#   portage: >
+#     package="app-portage/flaggie"
+#     state=emerged
+# 
+# - name: update repoman
+#   portage: >
+#     package="app-portage/repoman"
+#     state=emerged
+
+- name: package.maskにcmakeのバージョンを追加(2022/03時点の最新だとエラーになる。3.20.5-1だと可能)
+  shell: |
+    echo -e '\n>dev-util/cmake-3.20.5-1' >> /etc/portage/package.mask/package.mask
+  when: "'cmake' not in package_mask_result.stdout"
+
+- name: system の前に sys-libs/glibc を --deep 無しで -crypt でコンパイル( sys-libs/libxcrypt が sys-libs/glibc -crypt である事を要求するため )
+  portage: >
+    package=sys-libs/glibc
+    state=present
+    newuse=yes
+
+- name: systemのアップデート前に依存関係を解決する sys-apps/pciutils
+  portage: >
+    package=sys-apps/pciutils
+    state=present
+    newuse=yes
+    update=yes
+
+# カーネルソースをインストールした後
+# sudo emerge --newuse sys-fs/eudev  ← この問題は sys-apps/hwids[udev] の udev を手動で USE="-udev" としても 
+# package.use でしても解決しなかったので難しい... 
+# package.mask で、新しいものを無視しようと思う...   /etc/portage/package.mask/package.mask を修正した。
+- name: package.maskで sys-fs/eudev のバージョンを無視するようにする
+  shell: |
+    echo -e '\n>=sys-fs/eudev-3.2.11-r1' >> /etc/portage/package.mask/package.mask
+  when: "'eudev' not in package_mask_result.stdout"
+
+- name: sys-apps/hwids インストール
+  portage: >
+    package=sys-apps/hwids
+    state=present
+    newuse=yes
+    update=yes
+
+- name: Perlの依存関係を解決する
+  shell: |
+    emerge --newuse --update dev-perl/Digest-HMAC dev-vcs/git dev-perl/MailTools virtual/perl-Digest-SHA

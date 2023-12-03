@@ -1,0 +1,62 @@
+# portageでの書き方
+# https://docs.ansible.com/ansible/2.3/portage_module.html
+
+# 途中、 reboot を含むので、2回実行する必要がある。
+
+- name: Gentooのレポジトリを追加
+  block:
+  - name: Gentooのレポジトリがあるか確認
+    stat:
+      path: /var/db/repos/genpi64
+    register: repo_check
+    check_mode: no
+    changed_when: false
+  - name: Gentooのレポジトリを追加
+    shell: |
+      git clone https://github.com/GenPi64/genpi64-overlay.git /var/db/repos/genpi64
+      emerge --sync
+    when: not repo_check.stat.exists
+
+- name: ディスクサイズを拡張
+  block:
+  - name: ルートパーティションのサイズを取得
+    shell: |-
+      df / | tail -n1 | awk '{print $2}'
+    register: autoexpand_check
+    check_mode: no
+    changed_when: false
+  - name: registerを表示
+    debug:
+      msg: "{{ autoexpand_check }}"
+  - name: パーティションが小さい場合は /boot/dont_autoexpand_root を削除
+    when: 5000000 >= {{ autoexpand_check.stdout | int }}
+    register: dont_autoexpand_root_remove
+    file:
+      path: /boot/dont_autoexpand_root
+      state: absent
+  - name: registerを表示
+    debug:
+      msg: "{{ dont_autoexpand_root_remove }}"
+  - name: 再起動
+    reboot:
+    when: dont_autoexpand_root_remove.changed == true
+
+
+- name: systemdのパッケージが混ざるのを防ぐ
+  vars:
+    package_list:
+    - sys-apps/man-db-2.10.2
+    - sys-apps/systemd-tmpfiles-249.9
+  block:
+  - name: regex_replaceのテスト
+    loop: "{{ package_list }}"
+    debug:
+      msg: "{{ item | regex_replace('^.*\\/(.*)$', '\\1') }}"
+  - name: package.mask でアップデートを止める
+    loop: "{{ package_list }}"
+    lineinfile:
+      path: "/etc/portage/package.mask/package.mask"
+      regexp: "^>{{ item }}.*$"
+      line: ">{{ item }}"
+      state: present
+      create: yes

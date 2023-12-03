@@ -1,0 +1,21 @@
+#!/sbin/openrc-run
+# Copyright 2020 Gentoo Authors
+# Distributed under the terms of the GNU General Public License v2
+
+name="softether daemon"
+description="stop/start vpnserver"
+command=/usr/bin/vpnserver
+
+depend() {
+  need net
+  use logger
+}
+
+
+start() {
+  vpnserver start
+}
+
+stop() {
+  vpnserver stop
+}

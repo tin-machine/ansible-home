@@ -1,0 +1,28 @@
+ServerPasswordSet {{ ServerPasswordSet }}
+KeepDisable
+OpenVpnEnable  no  /PORTS:{{ OpenVpnEnablePort }}
+SstpEnable  no
+VpnAzureSetEnable  no
+VpnOverIcmpDnsEnable  /ICMP:no  /DNS:no
+ListenerCreate {{ ListenerCreate }}
+ListenerDelete 443
+ListenerDelete 992
+ListenerDelete 1194
+ListenerDelete 5555
+HubDelete  DEFAULT
+HubCreate  VpnHub0_dummy /PASSWORD:{{VpnHub0_dummy}}
+HubCreate  VpnHub1 /PASSWORD:{{VpnHub1}}
+IPsecEnable /L2TP:yes /L2TPRAW:no /ETHERIP:no /PSK:ipsecvpn /DEFAULTHUB:VpnHub0_dummy
+Hub VpnHub0_dummy
+SetEnumDeny
+SetMaxSession 1
+Offline
+Hub  VpnHub1
+SetEnumDeny
+SetMaxSession  1
+OnLine
+NatDisable
+DhcpDisable
+UserCreate HubUser1 /GROUP:none /REALNAME:none /NOTE:none
+UserPasswordSet HubUser1 /PASSWORD:{{UserPasswordSet}}
+SyslogEnable 3 127.0.0.1

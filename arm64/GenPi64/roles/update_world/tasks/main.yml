@@ -1,0 +1,114 @@
+- name: distcc設定
+  block:
+  - name: distccインストール
+    portage: >
+      package="sys-devel/distcc"
+      state=present
+      loadavg=5
+  - name: distccdで自宅のセグメントを許可されているか確認
+    command: cat /etc/conf.d/distccd
+    register: distccd_result
+    check_mode: no
+    changed_when: false
+    failed_when: false
+  - name: distccdで自宅セグメントの許可
+    shell: |
+      echo -e '\nDISTCCD_OPTS="${DISTCCD_OPTS} --allow 10.10.254.0/24"' >> /etc/conf.d/distccd
+    when: "'10.10.254' not in distccd_result.stdout"
+  - name: distccでコンパイルするように設定されているか確認
+    command: cat /etc/portage/make.conf
+    register: make_conf_result
+    check_mode: no
+    changed_when: false
+    failed_when: false
+    # distcc時、２つ目以降のサーバに対してdistccされない症状が出た
+    # https://forums.gentoo.org/viewtopic-t-1094694-start-0.html
+    # network-sandbox機能があまり良くないそうなのでオフにしている
+    # オフにした所、複数サーバでコンパイルされるようになった。
+  - name: distccdでコンパイルするように設定。バイナリパッケージを作る/使うように設定
+    shell: |
+      echo -e '\nMAKEOPTS="-j6 -l5"\nFEATURES="distcc parallel-fetch parallel-install -userpriv -usersandbox -network-sandbox -pid-sandbox buildpkg getbinpkg binpkg-multi-instance"' >> /etc/portage/make.conf
+    when: "'distcc' not in make_conf_result.stdout"
+  - name: /etc/distcc/hosts の更新( distccのhostsは、できれば「自分は含まない」のが望ましいので除外している)
+    shell: |
+      distccd_list="10.10.254.96/8\n10.10.254.93/8\n10.10.254.87/4\n10.10.254.72/4\n10.10.254.67/4"
+      local_ip=$(ip a s | grep 10.10 | awk '{print $2}' | sed 's/\/.*//')
+      echo -e $distccd_list | grep -v $local_ip  | sed -z "s/\\n/ /g" > /etc/distcc/hosts
+  - name: distccdを自動起動
+    # ここで失敗する場合 /etc/init.d/distccd に記載されている /usr/bin/distccd の最初の / が抜けてないか確認
+    service: >
+      name=distccd
+      state=restarted
+      enabled=yes
+
+- name: gcc11.2 以上のきいバージョンは無視するようにする
+  block:
+  - name: package.maskの内容を取得
+    command: cat /etc/portage/package.mask/package.mask
+    register: package_mask_result
+    check_mode: no
+    changed_when: false
+    failed_when: false
+  - name: package.maskにgccのバージョンを制限する記述が無ければ追加(distccでコンパイルできるようにGCCのバージョンを固定したい)
+    shell: |
+      echo -e '\n>sys-devel/gcc-11.2.0' >> /etc/portage/package.mask/package.mask
+    when: "'gcc' not in package_mask_result.stdout"
+
+- name: パッケージアップデート
+  block:
+  - name: アップデート @system --deep 無し
+    portage: >
+      package="@system"
+      update=yes
+      noreplace=yes
+      sync=yes
+      deep=no
+      loadavg=5
+  - name: アップデート @system --deep 付き
+    portage: >
+      package="@system"
+      state=present
+      update=yes
+      newuse=yes
+      deep=yes
+      noreplace=no
+      changed_use=yes
+      loadavg=5
+      jobs=2
+  - name: install sys-process/htop
+    # sys-process/htop をアップデート
+    # sys-libs/ncurses のアップデートに必要だった。
+    portage: >
+      package=sys-process/htop
+      state=present
+  - name: アップデート @world --deep 付き
+    portage: >
+      package="@world"
+      state=present
+      update=yes
+      newuse=yes
+      deep=yes
+      noreplace=no
+      changed_use=yes
+      keepgoing=yes
+      loadavg=5
+
+- name: アップデートするcrontabの登録
+  block:
+  - name: crontabに登録
+    cron:
+      name: world_update
+      minute: 1
+      hour: 3
+      job: "cd /net/10.10.254.10/homes/kaoru/workspace/ansible/Genpi64/common-roles && /usr/bin/ansible-playbook update_world.yml -i ../host 2>> /var/log/emerge_world.log"
+      state: present
+    when: emerge_role == 'server'
+  - name: crontabに登録
+    cron:
+      name: world_update
+      minute: 1
+      hour: 3
+      weekday: "5-6"
+      job: "cd /net/10.10.254.10/homes/kaoru/workspace/ansible/Genpi64/common-roles && /usr/bin/ansible-playbook update_world.yml -i ../host 2>> /var/log/emerge_world.log"
+      state: present
+    when: emerge_role != 'server'
