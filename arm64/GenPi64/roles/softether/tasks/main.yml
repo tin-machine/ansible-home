@@ -131,7 +131,7 @@
           path: /root/setup.txt
           state: absent
       when: check_port.rc == 1
-    - name: DDns機能をオフにする
+    - name: DDns、IPv6リスナー、NATトラバーサルをオフにする
       block:
         - name: SoftEtherデーモンの停止
           service:
