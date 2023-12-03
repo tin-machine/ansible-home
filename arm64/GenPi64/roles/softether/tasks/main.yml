@@ -58,7 +58,7 @@
     - block:
       - name: 自動起動
         block:
-          - name: initd
+          - name: initdの場合
             block:
             - name: initd起動スクリプトが存在するか
               stat:
@@ -72,7 +72,11 @@
                 dest: /etc/init.d/softether
                 mode: 0755
             when: ansible_facts.service_mgr == "initd"
-          - name: systemd起動スクリプトのコピー
+          - name: systemdのスクリプトの存在確認
+            stat:
+              path: /usr/lib/systemd/system/softether-vpn.service
+            register: systemd_script
+          - name: systemdの場合
             block:
               - name: ファクト変数ansible_interfaces出力
                 debug:
@@ -83,17 +87,19 @@
               - name: ethernet_interfacesの出力
                 debug:
                   msg: "{{ ethernet_interfaces }}"
-              - name: 'テンプレートからコピー'
+              - name: 'systemd起動スクリプト、テンプレートからコピー'
                 template:
                   src: softether_boot_systemd.j2
                   dest: /usr/lib/systemd/system/softether-vpn.service
                   owner: root
                   group: root
                   mode: 0644
-                when: ansible_facts.service_mgr == 'systemd'
               - name: 'systemctl daemon-reload を実行'
                 systemd:
                     daemon_reload: yes
+            when:
+              - ansible_facts.service_mgr == 'systemd'
+              - not systemd_script.stat.exists
           - name: 自動起動
             service: >
               name=softether-vpn
@@ -125,3 +131,31 @@
           path: /root/setup.txt
           state: absent
       when: check_port.rc == 1
+    - name: DDns機能をオフにする
+      block:
+        - name: SoftEtherデーモンの停止
+          service:
+            name: softether-vpn
+            state: stopped
+        - name: /usr/vpnserver/vpn_server.config でDDnsをオフ
+          lineinfile:
+            path: '/usr/vpnserver/vpn_server.config'
+            regexp: 'bool Disabled false'
+            line: '   bool Disabled true'
+            state: present
+        - name: /usr/vpnserver/vpn_server.config でIPv6リスナーを停止
+          lineinfile:
+            path: '/usr/vpnserver/vpn_server.config'
+            regexp: 'bool DisableIPv6Listener false'
+            line: '   bool DisableIPv6Listener true'
+            state: present
+        - name: /usr/vpnserver/vpn_server.config でNATトラバーサルをオフ
+          lineinfile:
+            path: '/usr/vpnserver/vpn_server.config'
+            regexp: 'bool DisableNatTraversal false'
+            line: '   bool DisableNatTraversal true'
+            state: present
+        - name: SoftEtherデーモンの起動
+          service:
+            name: softether-vpn
+            state: restarted
