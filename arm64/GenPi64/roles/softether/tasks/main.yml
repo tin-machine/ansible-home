@@ -1,4 +1,3 @@
-
 - name: 設定ファイルが読み込まれているか
   block:
     - name: ファクト変数出力
@@ -124,7 +123,7 @@
       - name: 未設定の場合、設定ファイルの読み込み
         shell: |
           cd /root
-          vpncmd  localhost /SERVER /IN:setup.txt
+          vpncmd localhost /SERVER /IN:setup.txt
         when: check_port.rc == 1
       - name: 設定ファイルの削除
         file:
@@ -159,3 +158,32 @@
           service:
             name: softether-vpn
             state: restarted
+
+- name: wifi-eth0コンバータ側の設定
+  block:
+    - name: 既にブリッジ設定があるかチェック
+      shell: |
+        vpncmd /server localhost:{{ ListenerCreate }} /PASSWORD:{{ ServerPasswordSet }} /adminhub:VpnHub1 /cmd BridgeList | grep -A 1 '\-\-\-\-'
+      register:    check_bridge
+    - block:
+      - name: 'enで始まるインターフェース名の抽出'
+        set_fact:
+          ethernet_interfaces: "{{ ansible_interfaces | select('match', '^en.*') | join(' ') }}"
+      - name: ブリッジ未設定の場合は作成
+        shell: |
+          vpncmd /server localhost:{{ ListenerCreate }} /PASSWORD:{{ ServerPasswordSet }} /adminhub:VpnHub1 /cmd BridgeCreate VpnHub1 /DEVICE:{{ ethernet_interfaces }}
+      when: "'VpnHub1' not in check_bridge.stdout"
+    - name: 既にカスケード設定があるかチェック
+      shell: |
+        vpncmd /server localhost:{{ ListenerCreate }} /PASSWORD:{{ ServerPasswordSet }} /adminhub:VpnHub1 /cmd CascadeList | grep -A 1 '\-\-\-\-'
+      register:    check_cascade
+    - name: カスケード未設定の場合は作成
+      shell: |
+        vpncmd /server localhost:{{ ListenerCreate }} /PASSWORD:{{ ServerPasswordSet }} /adminhub:VpnHub1 /cmd CascadeCreate cascade_proxy /SERVER:{{ CascadeServer }}:{{ ListenerCreate }} /HUB:VpnHub1 /USERNAME:HubUser1
+      when: "'proxy' not in check_cascade.stdout"
+    - name: カスケードのパスワード設定
+      shell: |
+        vpncmd /server localhost:{{ ListenerCreate }} /PASSWORD:{{ ServerPasswordSet }} /adminhub:VpnHub1 /cmd CascadePasswordSet cascade_proxy /PASSWORD:{{ CascadePassword }} /TYPE:standard
+    - name: カスケードの有効化
+      shell: |
+        vpncmd /server localhost:{{ ListenerCreate }} /PASSWORD:{{ ServerPasswordSet }} /adminhub:VpnHub1 /cmd CascadeOnline cascade_proxy
