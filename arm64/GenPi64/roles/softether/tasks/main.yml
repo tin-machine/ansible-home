@@ -1,13 +1,3 @@
-- name: 設定ファイルが読み込まれているか
-  block:
-    - name: ファクト変数出力
-      debug:
-        msg: "{{ ansible_facts.service_mgr }}"
-    - name: whenのテスト
-      debug:
-        msg: 'trueだよ'
-      when: ansible_facts.service_mgr == 'systemd'
-
 - name: ipv6をオフにする
   block:
     - name: カーネル設定を確認
@@ -130,7 +120,7 @@
           path: /root/setup.txt
           state: absent
       when: check_port.rc == 1
-    - name: DDns、IPv6リスナー、NATトラバーサルをオフにする
+    - name: DDns、IPv6リスナー、NATトラバーサルをオフにする(この設定は設定ファイルを書き換える必要がある)
       block:
         - name: SoftEtherデーモンの停止
           service:
@@ -158,9 +148,15 @@
           service:
             name: softether-vpn
             state: restarted
+    - name: syslog設定
+      shell: |
+        vpncmd /server localhost:{{ ListenerCreate }} /PASSWORD:{{ ServerPasswordSet }} /cmd SyslogEnable 3 /HOST:localhost
 
-- name: wifi-eth0コンバータ側の設定
+- name: wifi-eth0コンバータ側の設定(eth0はL2、ハブの用途としてのみ使いたいのでLANケーブルは抜いておく)
   block:
+    - name: 有線LANのインターフェースでdhcpでの自動取得を停止する(L2接続のポート、ハブとして使いたい)
+      shell: |
+        nmcli connection mod "Wired connection 1" connection.autoconnect off
     - name: 既にブリッジ設定があるかチェック
       shell: |
         vpncmd /server localhost:{{ ListenerCreate }} /PASSWORD:{{ ServerPasswordSet }} /adminhub:VpnHub1 /cmd BridgeList | grep -A 1 '\-\-\-\-'
@@ -187,3 +183,4 @@
     - name: カスケードの有効化
       shell: |
         vpncmd /server localhost:{{ ListenerCreate }} /PASSWORD:{{ ServerPasswordSet }} /adminhub:VpnHub1 /cmd CascadeOnline cascade_proxy
+  when: softether_role == "converter"
