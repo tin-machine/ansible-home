@@ -1,50 +1,12 @@
-# ToDo
-# エージェントの認証トークンの受け渡しに改善の余地がある。
-#
-# NFSマウントしかないのか? AnsibleのVaultで渡せないか?
-#
-# 現状、prodの設定で書き込んでしまっているので、直した方が良い。
-# (エージェントではなく) サーバ側の方の認証トークンが変わる可能性があり、
-# その事を考えるとNFSマウントの方が、現在の値が分かる、AnsibleのVaultの値を書き換えなくて済むというメリットはある。
-
-- name: k3sをインストール
-  block:
-  - name: ロールの確認
-    debug:
-      msg: "{{ k3s_role }}"
-  - name: カーネルコマンドラインを修正
-    replace:
-      dest: '/boot/cmdline.txt'
-      regexp: 'rootdelay=10 init=/sbin/init'
-      replace: 'rootdelay=10 cgroup_memory=1 cgroup_enable=memory init=/sbin/init'
-    register: cmdline
-  - name: 再起動
-    when: cmdline.changed == true
-    reboot:
-  - name: kubectl がインストールされているかチェック
-    shell: "which kubectl"
-    register: kubectl_check
-    failed_when: kubectl_check.rc not in [0,1]
-  - name: kubectl_checkの確認
-    debug:
-      msg: "{{ kubectl_check }}"
-  - name: k3sのサーバをインストール
-    when: k3s_role == 'server' and kubectl_check.rc == 1
-    shell: |-
-      curl -sfL https://get.k3s.io | sh -s - --disable-agent --write-kubeconfig-mode 644
-
-# app-containers/slirp4netns は rootlesskit で利用する。
-#   $ /usr/bin/containerd-rootless-setuptool.sh install
-#   [INFO] Checking RootlessKit functionality
-#   [rootlesskit:parent] error: exec: "slirp4netns": executable file not found in $PATH
 - name: nerdctlセットアップ
   vars:
     package_list:
+    - sys-cluster/kubectl
     - app-containers/nerdctl
     - sys-apps/rootlesskit
     - app-containers/slirp4netns
   block:
-  - name: package.accept_keywords配下にファイルを置く
+  - name: kubectl、nerdctl関連パッケージ、package.accept_keywords配下にファイルを置く
     loop: "{{ package_list }}"
     lineinfile:
       path: "/etc/portage/package.accept_keywords/{{ item | regex_replace('^.*\\/(.*)$', '\\1') }}"
@@ -54,135 +16,56 @@
       regexp: "^{{ item }} .*$"
       state: present
       create: yes
-  - name: インストール
+  - name: nerdctl関連、インストール
     loop: "{{ package_list }}"
     portage: >-
       package={{ item }}
       state=present
 
-- name: ステージング用k3sセットアップ
+- name: k3sをインストール
   block:
-    - block:
-      - name: ステージング k3sサーバの設定ディレクトリをマウント
-        mount:
-          src: 10.10.254.10:/k8s/stg/manifests
-          path: /var/lib/rancher/k3s/server/manifests
-          opts: rw,hard,intr,noatime,async,nolock
-          state: mounted
-          fstype: nfs
-      - name: ステージング k3sのサーバのトークンを取得(エージェントのインストールに使う)
+  - name: ロールの確認
+    debug:
+      msg: "{{ k3s_role }}"
+  - name: サービスレベル、デプロイ環境の確認
+    debug:
+      msg: "{{ service_level }}"
+  - name: カーネルコマンドラインを修正
+    replace:
+      dest: '/boot/cmdline.txt'
+      regexp: 'rootdelay=10 init=/sbin/init'
+      replace: 'rootdelay=10 cgroup_memory=1 cgroup_enable=memory init=/sbin/init'
+    register: cmdline
+  - name: 再起動
+    when: cmdline.changed == true
+    reboot:
+  - name: k3sがインストールされているかチェック
+    shell: "which k3s"
+    register: k3s_check
+    failed_when: k3s_check.rc not in [0,1]
+  - name: kubectl_checkの確認
+    debug:
+      msg: "{{ k3s_check }}"
+  - name: k3sサーバをインストール
+    when: k3s_role == 'server' and k3s_check.rc == 1
+    shell: |-
+      curl -sfL https://get.k3s.io | sh -s - --disable-agent --write-kubeconfig-mode 644
+  - name: k3sエージェントをインストール
+    block:
+      - name: サーバのキーを取得
         shell: |-
           cat /var/lib/rancher/k3s/server/node-token
-        register: k3s_stg_token
-      - name: ステージング k3sのサーバのトークンをset_fact(set_factしないと次のステップに引き継がれない)
-        set_fact:
-          k3s_stg_server_token: "{{ k3s_stg_token.stdout }}"
-        delegate_to: "{{ item }}" # 変数を渡すホスト
-        delegate_facts: true # fact変数の更新する場合trueにする必要がある
-        with_items: "{{ groups['all'] }}" # 全ホストに受け渡す
-      - name: k3sのトークンの確認
+        delegate_to: k3s-{{ service_level }}-server
+        register: server_token
+      - name: k3sサーバのIPアドレスの取得
+        shell: |-
+          ip addr show end0 | grep 'inet ' | awk '{print $2}' | cut -d/ -f1
+        delegate_to: k3s-{{ service_level }}-server
+        register: server_ip
+      - name: k3sサーバのIPアドレスの表示
         debug:
-          msg: "{{ k3s_stg_server_token }}"
-      when: inventory_hostname == 'k3s-stg-server'
-    - name: k3s agent がインストールできたか確認
-      shell: "which kubectl"
-      register: kubectl_installed_check_stg
-      failed_when: kubectl_installed_check_stg.rc not in [0,1]
-      when: inventory_hostname is regex("k3s-stg-agent-.*")
-    - block:
-      - name: ステージング k3sのエージェントのインストール
+          msg: "{{ server_ip }}"
+      - name: k3sのエージェントのインストール
         shell: |-
-          curl -sfL https://get.k3s.io | K3S_TOKEN={{ k3s_stg_server_token }} K3S_URL=https://10.10.254.87:6443 sh - # K3S_URLはhostsに記載してあってもIPアドレスである必要があった。
-      when: inventory_hostname is regex("k3s-stg-agent-.*") and kubectl_installed_check_stg.rc == 1
-
-- name: プロダクション用k3sセットアップ
-  block:
-    # - block:
-    #   - name: プロダクション k3sサーバの設定ディレクトリをマウント
-    #     mount:
-    #       src: 10.10.254.10:/k8s/prd/manifests
-    #       path: /var/lib/rancher/k3s/server/manifests
-    #       opts: rw,hard,intr,noatime,async,nolock
-    #       state: mounted
-    #       fstype: nfs
-    #   - name: プロダクション k3sのサーバのトークンを取得(エージェントのインストールに使う)
-    #     shell: |-
-    #       cat /var/lib/rancher/k3s/server/node-token
-    #     register: k3s_prd_token
-    #   - name: プロダクション k3sのサーバのトークンをset_fact(set_factしないと次のステップに引き継がれない)
-    #     set_fact:
-    #       k3s_prd_server_token: "{{ k3s_prd_token.stdout }}"
-    #     delegate_to: "{{ item }}" # 変数を渡すホスト
-    #     delegate_facts: true # fact変数の更新する場合trueにする必要がある
-    #     with_items: "{{ groups['all'] }}" # 全ホストに受け渡す
-    #   - name: k3sのトークンの確認
-    #     debug:
-    #       msg: "{{ k3s_prd_server_token }}"
-    #   when: inventory_hostname == 'k3s-prd-server'
-    - name: k3s agent がインストールできたか確認
-      shell: "which kubectl"
-      register: kubectl_installed_check_prd
-      failed_when: kubectl_installed_check_prd.rc not in [0,1]
-      when: inventory_hostname is regex("k3s-prd-agent-.*")
-    - block:
-      - name: プロダクション k3sのエージェントのインストール
-        shell: |-
-          curl -sfL https://get.k3s.io | K3S_TOKEN="K10e920d17d4b1ec674bbdecd950a99e815489f3475ebb70ae0d2e55fdc7bf99b78::server:0cab392a9990c37870aebe5ec4554158" K3S_URL=https://10.10.254.93:6443 sh - # K3S_URLはhostsに記載してあってもIPアドレスである必要があった。
-      when: inventory_hostname is regex("k3s-prd-agent-.*") and kubectl_installed_check_prd.rc == 1
-
-- name: zramを切る(k3sはメモリを使うので)
-  block:
-  - name: zram tmp off
-    service: >
-      name=zram_tmp
-      state=stopped
-      enabled=no
-  - name: zram var tmp off
-    service: >
-      name=zram_var_tmp
-      state=stopped
-      enabled=no
-    register: zram
-  - name: 再起動
-    when: zram.changed == true
-    reboot:
-
-# curl -sfL https://get.k3s.io | K3S_TOKEN={{ k3s_prd_server_token }} K3S_URL=https://10.10.254.93:6443 sh - # K3S_URLはhostsに記載してあってもIPアドレスである必要があった。
-
-#   - name: k3sのトークンの確認
-#     when: inventory_hostname == 'k3s-prd-server'
-#     debug:
-#       msg: "{{ k3s_prd_token }}"
-
-#   - name: k3sのサーバのIPアドレスをset_factで変数に入れる
-#     when: k3s_role == 'server'
-#     set_fact:
-#       k3s_server_name: "{{ inventory_hostname }}"
-#     delegate_to: "{{ item }}" # 変数を渡すホスト
-#     delegate_facts: true # fact変数の更新する場合trueにする必要がある
-#     with_items: "{{ groups['all'] }}" # 全ホストに受け渡す
-#   - name: k3s_server_nameの確認
-#     debug:
-#       msg: "{{ k3s_server_name }}"
-
-
-
-#      msg: "/etc/portage/package.accept_keywords/{{ item | regex_replace('^.*\\/(.*)$', '\\1') }}"
-#
-#  - name: package.accept_keywords配下にファイルを置く
-#    loop: "{{ package_list }}"
-#    lineinfile:
-#      # lineinfile の使い方 https://qiita.com/tbuchi888/items/80fded8d11366e967290
-#      # https://qiita.com/cognitom/items/57de72b739642041dcd5#lineinfile
-#      path: "/etc/portage/package.accept_keywords/{{ item | regex_replace('^.*\\/(.*)$', '\\1') }}"
-#      line: "{{ item }} **"
-#      # regexp には ** のような正規表現は使えなかった。pythonのエラーになる。
-#      # またバックスラッシュでのエスケープもエラーになる。
-#      regexp: "^{{ item }} .*$"
-#      state: present
-#      create: yes
-#  - name: インストール
-#    loop: "{{ package_list }}"
-#    portage: >-
-#      package={{ item }}
-#      state=present
+          curl -sfL https://get.k3s.io | K3S_TOKEN={{ server_token.stdout }} K3S_URL=https://{{ server_ip.stdout }}:6443 sh - # K3S_URLはhostsに記載してあってもIPアドレスである必要があった。
+    when: k3s_role == 'agent' and k3s_check.rc == 1

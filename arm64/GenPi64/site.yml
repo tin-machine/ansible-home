@@ -1,10 +1,27 @@
 ---
+- name: base
+  gather_facts: true
+  become: yes # https://qiita.com/imoyoukan/items/12832aecd956d14b03f5 https://docs.ansible.com/ansible/2.9_ja/user_guide/become.html
+  hosts: base
+  roles:
+    - common/base
+    - common/change_make_conf
+    - common/nfs_mount
+    - common/resolver
+    - common/cli_tools
+    - common/ntp
+    - common/daemon
+    - common/user_add
+- name: k3s
+  gather_facts: true
+  become: yes # https://qiita.com/imoyoukan/items/12832aecd956d14b03f5 https://docs.ansible.com/ansible/2.9_ja/user_guide/become.html
+  hosts: k3s
+  roles:
+    - k3s
 - name: softether
   gather_facts: true
   become: yes # https://qiita.com/imoyoukan/items/12832aecd956d14b03f5 https://docs.ansible.com/ansible/2.9_ja/user_guide/become.html
   hosts: softether
   roles:
-    - common/user_add
     - sdcard
     - softether
-    # - common/utility_install

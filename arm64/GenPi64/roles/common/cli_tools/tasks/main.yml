@@ -1,0 +1,65 @@
+- name: package.unmask の確認
+  command: cat /etc/portage/package.unmask
+  register: unmask_result
+  check_mode: no
+  changed_when: false
+  failed_when: false
+
+- name: package.accept_keywordsディレクトリ作成
+  file: path=/etc/portage/package.accept_keywords state=directory owner=root group=root mode=0775
+
+- name: package.accept_keywords の確認
+  command: cat /etc/portage/package.accept_keywords/package.accept_keywords
+  register: accept_keywords_result
+  check_mode: no
+  changed_when: false
+  failed_when: false
+
+- name: シンプルなアプリ追加
+  portage: >-
+    package={{ item }}
+    loadavg=5
+    state=present
+  loop:
+    - app-admin/logrotate
+    - net-dns/bind-tools
+    - app-editors/neovim
+    - app-misc/jq
+    - app-misc/tmux
+    - app-portage/flaggie
+    - app-shells/fish
+    - app-vim/vim-tmux
+
+# pkgdevは一時的にビルドに失敗するのでコメントアウト
+#    - dev-util/pkgdev
+# ansibleは大きいので一時的に除外
+#    - app-admin/ansible
+
+- name: 開発版を許可するインストール
+  vars:
+    package_list:
+    - app-shells/fzf
+    - app-text/lv
+  block:
+  - name: regex_replaceのテスト
+    loop: "{{ package_list }}"
+    debug:
+      msg: "/etc/portage/package.accept_keywords/{{ item | regex_replace('^.*\\/(.*)$', '\\1') }}"
+  - name: package.accept_keywords配下にファイルを置く
+    loop: "{{ package_list }}"
+    lineinfile:
+      # lineinfile の使い方 https://qiita.com/tbuchi888/items/80fded8d11366e967290
+      # https://qiita.com/cognitom/items/57de72b739642041dcd5#lineinfile
+      path: "/etc/portage/package.accept_keywords/{{ item | regex_replace('^.*\\/(.*)$', '\\1') }}"
+      line: "{{ item }} **"
+      # regexp には ** のような正規表現は使えなかった。pythonのエラーになる。
+      # またバックスラッシュでのエスケープもエラーになる。
+      regexp: "^{{ item }} .*$"
+      state: present
+      create: yes
+  - name: インストール
+    loop: "{{ package_list }}"
+    portage: >-
+      package={{ item }}
+      loadavg=1
+      state=present

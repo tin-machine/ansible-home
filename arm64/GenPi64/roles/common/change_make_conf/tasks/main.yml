@@ -10,7 +10,7 @@
     lineinfile:
       path: '/etc/portage/make.conf'
       regexp: '^PYTHON_TARGETS='
-      line: 'PYTHON_TARGETS="python3_11"'
+      line: 'PYTHON_TARGETS="python3_10 python3_11 python3_12"'
       state: present
   - name: CPUのコア数を取得
     shell: 'cat /proc/cpuinfo | grep processor | wc -l'
@@ -24,5 +24,30 @@
     lineinfile:
       path: '/etc/portage/make.conf'
       regexp: '^EMERGE_DEFAULT_OPTS='
-      line: "EMERGE_DEFAULT_OPTS=\"--jobs 2 --load-average {{cpu_num.stdout}}\""
+      line: "EMERGE_DEFAULT_OPTS=\"--usepkg=y --jobs 2 --load-average {{cpu_num.stdout}}\""
+  - name: make.conf FEATURES を変更する
+    lineinfile:
+      path: '/etc/portage/make.conf'
+      regexp: '^FEATURES='
+      line: "FEATURES=\"buildpkg getbinpkg binpkg-multi-instance clean-logs compress-build-logs parallel-fetch parallel-install -distcc -userpriv -usersandbox -network-sandbox -pid-sandbox \""
       state: present
+  - name: portageのビルドをローカルストレージの /usr/local/tmp/portage で行う
+    # /var/tmp/portage がzramでマウントされている。
+    # 通常、こちらの方が高速だが、大きめのビルドを行う場合、ディスクフルでビルドできないため
+    # ローカルドライブに
+    # /usr/local/tmp/portage
+    # を作成して /etc/portage/make.confの環境変数を変えて、こちらでビルドする。
+    # システム系のものはzramでも大丈夫だが、ユーティリティ系のものは大きいものがあるので、
+    # このタイミングで切り替える。
+    block:
+    - name: ディレクトリ作成
+      file:
+        path: /usr/local/tmp/portage
+        state: directory
+    - name: ビルド作業用ディレクトリの変更
+      # https://wiki.gentoo.org/wiki/Handbook:AMD64/Full/Portage/ja
+      lineinfile:
+        path: '/etc/portage/make.conf'
+        regexp: '^PORTAGE_TMPDIR'
+        line: 'PORTAGE_TMPDIR="/usr/local/tmp/portage"'
+        state: present
