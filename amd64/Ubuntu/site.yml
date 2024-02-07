@@ -1,0 +1,9 @@
+---
+- name: base
+  gather_facts: true
+  become: yes # https://qiita.com/imoyoukan/items/12832aecd956d14b03f5 https://docs.ansible.com/ansible/2.9_ja/user_guide/become.html
+  hosts: ubuntu
+  roles:
+    - base
+    - nfs_mount
+    - user_add
