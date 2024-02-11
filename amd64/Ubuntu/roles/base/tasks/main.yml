@@ -1,0 +1,179 @@
+- name: ディスク書き込みを遅延する処理が入っているか確認
+  block:
+  - name: 設定ファイルがあるか確認
+    stat:
+      path: /etc/sysctl.d/99-disk.conf
+    register: disk_check
+    check_mode: no
+    changed_when: false
+  - name: 書き込み遅延する設定を追加
+    shell: |
+      echo -e 'vm.dirty_background_ratio=70\nvm.dirty_ratio=70\nvm.dirty_writeback_centisecs=5000\nvm.dirty_expire_centisecs=30000' >> /etc/sysctl.d/99-disk.conf
+      sysctl -p
+    when: not disk_check.stat.exists
+
+- name: パッケージレポジトリ追加
+  block:
+    - name: Add an apt key by id from a keyserver
+      ansible.builtin.apt_key:
+        keyserver: keyserver.ubuntu.com
+        id: B05498B7
+          # - name: GPUのドライバ
+          #   ansible.builtin.apt_repository:
+          #       repo: 'ppa:oibaf/graphics-drivers'
+    - name: VSCodeのGPG署名をインストール
+      apt_key:
+        url: https://packages.microsoft.com/keys/microsoft.asc
+        state: present
+      become: true
+    - name: VSCode
+      apt_repository:
+        repo: 'deb [arch=amd64] https://packages.microsoft.com/repos/vscode stable main'
+        update_cache: yes
+    - name: ChromeのGPG署名をインストール
+      apt_key:
+        url: https://dl-ssl.google.com/linux/linux_signing_key.pub
+        state: present
+      become: true
+    - name: Chrome
+      apt_repository:
+        repo: "deb http://dl.google.com/linux/chrome/deb/ stable main"
+        update_cache: yes
+    - name: SteamのGPG署名をインストール
+      apt_key:
+        url: https://repo.steampowered.com/steam/archive/stable/steam.gpg
+        state: present
+      become: true
+    - name: Steam
+      apt_repository:
+        repo: 'deb http://repo.steampowered.com/steam/ precise steam'
+        update_cache: yes
+    - name: weztermの署名をインストール
+      apt_key:
+        url: https://apt.fury.io/wez/gpg.key
+        state: present
+      become: true
+    - name: weztermのレポジトリを追加
+      apt_repository:
+        repo: "deb https://apt.fury.io/wez/ * *"
+        update_cache: yes
+    - name: RANCHER DESKTOP 署名を追加
+      block:
+        - name: RANCHER DESKTOP 署名の存在確認
+          stat:
+            path: /usr/share/keyrings/isv-rancher-stable-archive-keyring.gpg
+          register: rancher_keyring
+        - block:
+          - name: RANCHER DESKTOP 署名を追加
+            get_url:
+              url: https://download.opensuse.org/repositories/isv:/Rancher:/stable/deb/Release.key
+              dest: /tmp/rancher-release.key
+              mode: '0644'
+          - name: RANCHER DESKTOP GPGキーをバイナリ形式に変換して保存
+            shell: |
+              gpg --dearmor < /tmp/rancher-release.key > /usr/share/keyrings/isv-rancher-stable-archive-keyring.gpg
+          when: not rancher_keyring.stat.exists
+    - name: rancher desktopのレポジトリを追加
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/isv-rancher-stable-archive-keyring.gpg] https://download.opensuse.org/repositories/isv:/Rancher:/stable/deb/ ./"
+        update_cache: yes
+
+# - name: Add specified repository into sources list
+#   ansible.builtin.apt_repository:
+#       repo: 'multiverse'
+
+- name: "apt-get updateを行う"
+  apt:
+    update_cache: yes
+       
+- name: 全てアップグレード
+  apt:
+    upgrade: dist
+
+- name: MultiMCのインストール
+  block:
+  - name: 一時ディレクトリ作成
+    tempfile:
+      state: directory
+    register: tmpdir
+  - name: MultiMCのdebをダウンロード
+    get_url:
+      url: https://files.multimc.org/downloads/multimc_1.6-1.deb
+      dest: "{{ tmpdir.path }}"
+  - name: MultiMCをdebからインストール
+    apt:
+      deb: "{{ tmpdir.path }}/multimc_1.6-1.deb"
+
+- name: snapではなくdebパッケージのfirefoxインストール
+  block:
+  - name: Snapのfirefoxが入っているか取得
+    command: snap list firefox
+    register: snap_list
+    failed_when: snap_list.rc == 1
+    ignore_errors: yes
+  - block:
+    - name: SnapでインストールされているFirefoxを削除
+      snap:
+        name: firefox
+        state: absent
+    - name: Ubuntu22.04だと標準でdebがsnapへのエイリアスになっているので削除
+      apt:
+        name:
+          - firefox
+        state: absent
+    when: snap_list.rc == 0
+  - name: Mozilla Team PPAの追加
+    apt_repository:
+      repo: ppa:mozillateam/ppa
+      state: present
+  - name: MozillateamのPPAを優先するように変更
+    copy:
+      src: ../files/mozillateam.pref
+      dest: /etc/apt/preferences.d/mozillateam.pref
+      mode: 644
+  - name: "apt-get updateを行う"
+    apt:
+      update_cache: yes
+  - name: firefoxインストール
+    apt:
+      state: latest
+      name:
+        - firefox
+
+# rancher-desktop はインストールに時間がかかる。別に分けた方がトラブルシューティングの際に便利かもしれない。
+- name: Install multi packages
+  apt:
+    state: latest
+    name:
+      - apt-transport-https
+      - autokey-qt
+      - asunder
+      - awscli
+      - bridge-utils
+      - code
+      - curl
+      - fcitx-mozc
+      - fish
+      - fzf
+      - golang
+      - google-chrome-stable
+      - lame
+      - libvirt-daemon
+      - libvirt-clients
+      - neovim
+      - nfs-common
+      - mesa-utils
+      - openjdk-8-jdk
+      - openjdk-11-jdk
+      - openssh-server
+      - qemu
+      - qemu-kvm
+      - rancher-desktop
+      - steam-launcher
+      - tmux
+      - wezterm-nightly
+      - wine
+      - winetricks
+      - vim
+      - virt-manager
+      - xdg-user-dirs-gtk
