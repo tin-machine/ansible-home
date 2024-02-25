@@ -140,6 +140,10 @@
       name:
         - firefox
 
+- name: SnapでSlackのインストール
+  snap:
+    name: slack
+
 # rancher-desktop はインストールに時間がかかる。別に分けた方がトラブルシューティングの際に便利かもしれない。
 - name: Install multi packages
   apt:
